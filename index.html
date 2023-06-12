@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Square tetris</title>
+
+  <style>
+    body {
+      margin: 0;
+    }
+
+    .page {
+      display: flex;
+      flex-direction: column;
+      min-height: 100vh;
+    }
+    .page header {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 100%;
+      height: 100px;
+      background: lightblue;
+    }
+    .page section {
+      align-items: center;
+      display: flex;
+      flex-grow: 1;
+      min-height: 400px;
+      flex-direction: column;
+    }
+    .page section nav {
+      align-items: center;
+      flex-shrink: 0;
+      padding: 1em;
+    }
+    .page section main {
+      display: flex;
+      flex-grow: 1;
+      flex-direction: column;
+      padding: 1em;
+    }
+    #menu-control {
+      color: white;
+      padding: 5px 20px;
+      cursor: pointer;
+      background-color: #111111;
+      display: none;
+    }
+    #menu-control-input {
+      display: none;
+    }
+    #menu-control-input:checked + #menu {
+      display: block;
+    }
+
+    #menu ul {
+      margin:0;
+      padding: 0;
+    }
+    #menu li {
+      display: inline-block;
+      list-style-type: none;
+      background-color: #111;
+    }
+    #menu li:nth-child(2n) {
+      background-color: #666;
+    }
+    #menu a {
+      display: inline-block;
+      padding: 5px 20px;
+      text-decoration: none;
+      color: #fefefe;
+    }
+    #menu a::after {
+      content: " " attr(data-state);
+      color: red;
+    }
+
+
+    @media all and (max-width: 700px) {
+      .page section {
+        flex-direction: column;
+      }
+      .page section main {
+        order: 1;
+      }
+
+      #menu-control {
+        display: inline-block;
+      }
+
+      #menu {
+        display: none;
+        counter-reset: item;
+      }
+
+      #menu li {
+        display: block;
+      }
+
+      #menu li a::before {
+        counter-increment: item;
+        content: counter(item) ") ";
+        color: orange;
+      }
+    }
+
+    body {
+      font-family: Arial, sans-serif;
+    }
+    #dnd {
+      height: 0px;
+      width: 0px;
+      border-radius: 50px;
+      border: 2px dotted #a0a0a0;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      transition: all 3s;
+    }
+    #dnd::before {
+      content: "Drop custom background!";
+      color: #2e2e2e;
+    }
+    #dnd:hover {
+      background-color: green;
+    }
+    #gameCanvas {
+      border: 1px solid black;
+    }
+  </style>
+</head>
+<body>
+<div class="page">
+  <header>
+    <h1>Square tetris</h1>
+  </header>
+  <section>
+    <label id="menu-control" for="menu-control-input">Menu</label><input type="checkbox" id="menu-control-input" />
+    <nav id="menu">
+      <ul>
+        <li><a data-route-link href="?page=game">Play</a></li>
+        <li><a data-route-link href="?page=image">Custom background</a></li>
+      </ul>
+    </nav>
+    <main id="content"></main>
+  </section>
+</div>
+
+<script type="text/javascript">
+  navigator.serviceWorker.register("/worker.js").then(() => {
+    console.log("Service worker ready")
+  })
+
+  document.body.addEventListener('keydown', this)
+
+  //class that is managing blocks at tetris grid
+  class Block {
+    #fallingBlock;
+    #ctx;
+    #blockSize;
+    #rows;
+    #grid;
+    #columns;
+
+    constructor(ctx, blockSize, rows, columns, grid) {
+      this.#ctx = ctx;
+      this.#blockSize = blockSize;
+      this.#rows = rows;
+      this.#columns = columns;
+      this.#grid = grid;
+      this.#fallingBlock = {
+        x: 4,
+        y: 0,
+      };
+      this.handleKeyDown = this.handleKeyDown.bind(this);
+      document.addEventListener('keydown', this.handleKeyDown);
+    }
+
+    handleKeyDown(event) {
+      switch(event.key) {
+        case "ArrowLeft":  this.decrementX(); break;
+        case "ArrowRight":  this.incrementX(); break;
+      }
+    }
+
+    incrementY(){
+      this.#fallingBlock.y++
+    }
+
+    incrementX(){
+      this.#fallingBlock.x++
+    }
+
+    decrementX(){
+      this.#fallingBlock.x--
+    }
+
+    drawFallingBlock() {
+      this.#ctx.fillStyle = "blue";
+      this.#ctx.fillRect(
+              this.#fallingBlock.x * this.#blockSize,
+              this.#fallingBlock.y * this.#blockSize,
+              this.#blockSize,
+              this.#blockSize
+      )
+    }
+
+    checkCollision() {
+      const { x, y } = this.#fallingBlock;
+      if (y === this.#rows - 1) {
+        return true;
+      }
+      if (this.#grid[y + 1][x]) {
+        return true;
+      }
+      return false;
+    }
+
+    stopFallingBlock() {
+      const { x, y } = this.#fallingBlock;
+      this.#grid[y][x] = true;
+    }
+
+    placeBlock(){
+      for (let row = 0; row < this.#rows; row++) {
+        for (let col = 0; col < this.#columns; col++) {
+          if (this.#grid[row][col]) {
+            this.#ctx.fillStyle = "gray";
+            this.#ctx.fillRect(
+                    col * this.#blockSize,
+                    row * this.#blockSize,
+                    this.#blockSize,
+                    this.#blockSize
+            );
+          }
+        }
+      }
+    }
+  }
+
+  //class for routing through single page app
+  class Router {
+    constructor({pages, defaultPage}) {
+      this.pages = pages;
+      this.defaultPage = defaultPage;
+      this.currentPage = null
+
+      // first run
+      this.route(window.location.href);
+
+      // listen on url changes from user clicking back button
+      window.addEventListener('popstate', e => {
+        this.route(window.location.href);
+      });
+
+      // listen on url changes from user clicks
+      window.addEventListener('click', e => {
+        const element = e.target
+        if (element.nodeName === 'A') {
+          e.preventDefault();
+          this.route(element.href);
+          window.history.pushState(null, null, element.href)
+        }
+      });
+    }
+
+    route(urlString) {
+      const url = new URL(urlString)
+      const page = url.searchParams.get('page')
+
+      if (this.currentPage) {
+        this.currentPage.pageHide()
+      }
+
+      const page404 = this.pages.find(p => p.key === '404')
+      const pageInstanceMatched = this.pages.find(p => p.key === (page ?? this.defaultPage))
+      const currentPage = pageInstanceMatched ?? page404
+
+      this.currentPage = currentPage
+      this.currentPage.pageShow()
+    }
+  }
+
+  //"interafe" for Pages
+  class Page {
+    constructor({key, title}) {
+      this.pageElement = document.querySelector(`#content`)
+      this.title = title
+      this.key = key
+    }
+
+    render() {
+      return ``
+    }
+
+    pageShow() {
+      this.pageElement.innerHTML = this.render()
+      document.title = this.title
+    }
+
+    pageHide() {
+      this.pageElement.innerHTML = ''
+    }
+  }
+
+
+  //page of tetris game
+  class PageGame extends Page {
+    #grid
+    #blockSize
+    #block
+    #ctx
+    #canvas
+    #rows
+    #columns
+    #soundPlaceBlock
+
+    constructor(settings) {
+      super(settings)
+      console.log("PageGame")
+      this.#grid = [];
+      this.#blockSize = 20;
+      this.#ctx = null;
+      this.#canvas = null;
+      this.#rows = null;
+      this.#columns = null
+    }
+
+    render() {
+      return `
+						<canvas id="gameCanvas" width="200" height="400"></canvas>
+                        <button class="start-button">Start</button>
+`
+    }
+
+    pageShow() {
+      super.pageShow()
+      this.#canvas = document.querySelector("#gameCanvas");
+      this.#ctx = this.#canvas.getContext("2d");
+
+
+      this.#rows = this.#canvas.height / this.#blockSize;
+      this.#columns = this.#canvas.width / this.#blockSize;
+
+      this.initGrid()
+      this.#block = new Block(this.#ctx, this.#blockSize, this.#rows, this.#columns, this.#grid);
+      document.querySelector('.start-button').addEventListener('click', this.update.bind(this))
+
+      this.setAudio().then(audio => {
+        this.#soundPlaceBlock = audio;
+      });
+      this.#ctx.clearRect(0, 0, this.#canvas.width, this.#canvas.height);
+      this.drawBackground()
+    }
+
+    pageHide() {
+      //this.#soundPlaceBlock = null;
+      super.pageHide()
+    }
+
+    handleStart() {
+      this.#block = new Block(this.#ctx, this.#blockSize, this.#rows, this.#columns, this.#grid);
+      this.update();
+    }
+
+
+    //simple challange made 10 times more complicated so I could demonstrate usage of ServiceWorker
+    //-> class that is fetching audio from external source
+    setAudio() {
+      return fetch("/sound.mp3")
+              .then(response => {
+                if (!response.ok) {
+                  throw new Error('Network response was not ok');
+                }
+                return response.blob(); // Return the response blob
+              })
+              .then(sound => {
+                const audio = new Audio();
+                audio.src = URL.createObjectURL(sound);
+                return audio; // Return the audio element
+              })
+              .catch(error => {
+                console.error('Error:', error);
+              });
+    }
+
+    //grid for tetris game
+    initGrid(){
+      for (let row = 0; row < this.#rows; row++) {
+        this.#grid[row] = [];
+        for (let col = 0; col < this.#columns; col++) {
+          this.#grid[row][col] = false;
+        }
+      }
+    }
+
+    //setting custom background of tetris
+    drawBackground () {
+      if (localStorage.length > 0){
+        const image = new Image();
+        image.src = localStorage.getItem("image")
+        this.#ctx.drawImage(image, 0, 0, this.#canvas.width, this.#canvas.height);
+      }
+    }
+
+    //game handler
+    update() {
+      if(!document.querySelector('.start-button')){
+        this.#soundPlaceBlock = null
+        return
+      }
+      this.#ctx.clearRect(0, 0, this.#canvas.width, this.#canvas.height);
+      let fallingBlock = this.#block
+      this.drawBackground()
+
+      if (!fallingBlock.checkCollision()) {
+        fallingBlock.incrementY();
+      } else {
+        fallingBlock.stopFallingBlock();
+        this.#soundPlaceBlock.pause();
+        this.#soundPlaceBlock.currentTime = 0;
+        this.#soundPlaceBlock.play()
+        this.#block = new Block(this.#ctx, this.#blockSize, this.#rows, this.#columns, this.#grid);
+      }
+      fallingBlock.drawFallingBlock();
+      fallingBlock.placeBlock();
+
+      setTimeout(() => {
+        requestAnimationFrame(this.update.bind(this));
+      }, 200);
+    }
+
+
+  }
+
+  //page for custom background drag and drop
+  class PageImage extends Page {
+    constructor(settings) {
+      super(settings)
+
+      this.log = null;
+    }
+
+    render() {
+      return `
+						<div id="dnd"></div>
+					`
+    }
+
+    pageShow() {
+      super.pageShow()
+
+      const dnd = document.querySelector("#dnd");
+      dnd.addEventListener("drop", this.onDrop);
+      dnd.addEventListener("dragover", this.onDragOver);
+      dnd.style.width = "200px";
+      dnd.style.height = "200px";
+    }
+
+    pageHide() {
+      dnd.removeEventListener("drop", this.onDrop);
+      dnd.removeEventListener("dragover", this.onDragOver);
+
+      super.pageHide()
+    }
+
+    onDragOver (e) {
+      e.preventDefault();
+    }
+
+    onDrop(e) {
+      e.preventDefault();
+      const files = e.dataTransfer.files;
+
+      dnd.style.transform = 'rotate(360deg)'
+      for (const f of files) {
+        if (!f.type.includes("image")) {
+          continue;
+        }
+
+        const fr = new FileReader();
+        fr.addEventListener("load", e => {
+          localStorage.setItem("image", fr.result);
+        });
+        fr.readAsDataURL(f);
+      }
+    }
+  }
+
+  class PageNotFound extends Page {
+    render() {
+      return `
+						<h2>Not found</h2>
+						<p>Unknown page</p>
+					`
+    }
+  }
+
+  new Router({
+    pages: [
+      new PageGame({key: 'game', title: 'Square tetris'}),
+      new PageImage({key: 'image', title: 'Custom background'}),
+      new PageNotFound({key: '404', title: 'Page not found'})
+    ],
+    defaultPage: 'game'
+  });
+
+
+</script>
+</body>
+</html>
