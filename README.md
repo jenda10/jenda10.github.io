@@ -6,4 +6,3 @@ UI popis:
 https://jenda10.github.io/?page=image
 -> nastavení custom pozadí pro tetris canvas pomocí drag and drop
 
-Technické parametry: 
